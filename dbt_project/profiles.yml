@@ -1,0 +1,8 @@
+orchestrator_compare_demo:
+  target: demo
+  outputs:
+    demo:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH') }}"
+      schema: main
+      threads: 2

@@ -1,0 +1,32 @@
+selectors:
+  - name: staging
+    description: Seeds plus staging models and their tests.
+    definition:
+      union:
+        - method: tag
+          value: staging
+          parents: true
+        - method: resource_type
+          value: seed
+
+  - name: marts
+    description: Revenue marts with all upstream dependencies.
+    definition:
+      method: tag
+      value: marts
+      parents: true
+
+  - name: nightly
+    description: All nightly tagged models plus snapshots.
+    definition:
+      union:
+        - method: tag
+          value: nightly
+        - method: resource_type
+          value: snapshot
+
+  - name: ci
+    description: Modified nodes and their children (requires --state in real CI).
+    definition:
+      method: tag
+      value: nightly

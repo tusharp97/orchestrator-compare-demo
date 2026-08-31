@@ -1,0 +1,20 @@
+[
+  {
+    "dag_id": "workshop_dbt_staging",
+    "selector": "staging",
+    "schedule": null,
+    "description": "Build seeds and staging models from a JSON-generated DAG."
+  },
+  {
+    "dag_id": "workshop_dbt_marts",
+    "selector": "marts",
+    "schedule": null,
+    "description": "Build the revenue mart and all upstream dependencies."
+  },
+  {
+    "dag_id": "workshop_dbt_nightly",
+    "selector": "nightly",
+    "schedule": "0 2 * * *",
+    "description": "Nightly tagged models and customer snapshot."
+  }
+]

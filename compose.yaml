@@ -1,0 +1,383 @@
+name: orchestrator-compare-demo
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
+  environment: &airflow-environment
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__FERNET_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__WEBSERVER__SECRET_KEY: portable-demo-only-secret
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    AIRFLOW__WEBSERVER__WARN_DEPLOYMENT_EXPOSURE: "false"
+    AIRFLOW__API__AUTH_BACKEND: airflow.api.auth.backend.basic_auth
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+    DBT_PROFILES_DIR: /opt/demo/dbt_project
+    DBT_PROJECT_DIR: /opt/demo/dbt_project
+    DEMO_DATA_DIR: /opt/demo/data
+    DUCKDB_PATH: /opt/demo/data/airflow.duckdb
+  user: "50000:0"
+  volumes:
+    - ./data:/opt/demo/data
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+  profiles: ["airflow"]
+
+x-dbt-runner: &dbt-runner
+  build:
+    context: .
+    dockerfile: dagster/Dockerfile
+  environment:
+    DBT_PROFILES_DIR: /opt/demo/dbt_project
+    DBT_PROJECT_DIR: /opt/demo/dbt_project
+    DEMO_DATA_DIR: /opt/demo/data
+  volumes:
+    - ./data:/opt/demo/data
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    profiles: ["airflow"]
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  airflow-init:
+    <<: *airflow-common
+    restart: "no"
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /opt/demo/data /tmp/dbt-target /tmp/dbt-logs
+        chmod 777 /opt/demo/data /tmp/dbt-target /tmp/dbt-logs || true
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Demo \
+          --lastname User \
+          --role Admin \
+          --email demo@example.com || echo "Airflow admin user already exists"
+
+  airflow-webserver:
+    <<: *airflow-common
+    restart: unless-stopped
+    command:
+      - bash
+      - -c
+      - |
+        mkdir -p /opt/demo/data /tmp/dbt-target /tmp/dbt-logs
+        chmod 777 /opt/demo/data /tmp/dbt-target /tmp/dbt-logs || true
+        exec airflow webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    restart: unless-stopped
+    command:
+      - bash
+      - -c
+      - |
+        mkdir -p /opt/demo/data /tmp/dbt-target /tmp/dbt-logs
+        chmod 777 /opt/demo/data /tmp/dbt-target /tmp/dbt-logs || true
+        exec airflow scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob"]
+      interval: 15s
+      timeout: 15s
+      retries: 30
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  dagster:
+    restart: unless-stopped
+    profiles: ["dagster"]
+    build:
+      context: .
+      dockerfile: dagster/Dockerfile
+    environment:
+      DBT_PROFILES_DIR: /opt/demo/dbt_project
+      DBT_PROJECT_DIR: /opt/demo/dbt_project
+      DEMO_DATA_DIR: /opt/demo/data
+      DUCKDB_PATH: /opt/demo/data/dagster.duckdb
+      DAGSTER_HOME: /opt/demo/dagster_home
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/opt/demo/data
+      - dagster-home:/opt/demo/dagster_home
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:3000/server_info"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  dbt-docs:
+    profiles: ["docs"]
+    build:
+      context: .
+      dockerfile: dagster/Dockerfile
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        dbt docs generate \
+          --project-dir /opt/demo/dbt_project \
+          --profiles-dir /opt/demo/dbt_project &&
+        exec dbt docs serve \
+          --project-dir /opt/demo/dbt_project \
+          --profiles-dir /opt/demo/dbt_project \
+          --host 0.0.0.0 \
+          --port 8081
+    environment:
+      DBT_PROFILES_DIR: /opt/demo/dbt_project
+      DBT_PROJECT_DIR: /opt/demo/dbt_project
+      DUCKDB_PATH: /tmp/dbt-docs.duckdb
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8081"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  prefect-server:
+    profiles: ["prefect"]
+    image: prefecthq/prefect:3.8.3-python3.11
+    restart: unless-stopped
+    command: ["prefect", "server", "start", "--host", "0.0.0.0", "--port", "4200"]
+    environment:
+      # Not /opt/prefect: that directory belongs to the image.
+      PREFECT_HOME: /opt/prefect-data
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_SERVER_API_PORT: "4200"
+      PREFECT_UI_API_URL: http://localhost:4200/api
+    ports:
+      - "4200:4200"
+    volumes:
+      - prefect-home:/opt/prefect-data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  prefect-run:
+    profiles: ["prefect-run"]
+    build:
+      context: .
+      dockerfile: prefect/Dockerfile
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+      DBT_PROFILES_DIR: /opt/demo/dbt_project
+      DBT_PROJECT_DIR: /opt/demo/dbt_project
+      DEMO_DATA_DIR: /opt/demo/data
+      DUCKDB_PATH: /opt/demo/data/prefect.duckdb
+      ORCHESTRATOR: prefect
+    volumes:
+      - ./data:/opt/demo/data
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - python /opt/demo/prefect_code/shop_pipeline.py && python /opt/demo/scripts/verify_summary.py prefect
+    restart: "no"
+
+  kestra-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    profiles: ["kestra"]
+    environment:
+      POSTGRES_DB: kestra
+      POSTGRES_USER: kestra
+      POSTGRES_PASSWORD: k3str4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d kestra -U kestra"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - kestra-postgres-data:/var/lib/postgresql/data
+
+  kestra:
+    profiles: ["kestra"]
+    build:
+      context: .
+      dockerfile: kestra/Dockerfile
+    user: "root"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    command: server standalone
+    environment:
+      # Capped so Kestra's JVM cannot take ~50% of an 8 GB Docker VM.
+      JAVA_OPTS: "-Xms256m -Xmx1g"
+      DBT_PROFILES_DIR: /opt/demo/dbt_project
+      DBT_PROJECT_DIR: /opt/demo/dbt_project
+      DEMO_DATA_DIR: /opt/demo/data
+      DUCKDB_PATH: /opt/demo/data/kestra.duckdb
+      ORCHESTRATOR: kestra
+      # Keys match Kestra v0.22's own docker-compose.yml.
+      KESTRA_CONFIGURATION: |
+        datasources:
+          postgres:
+            url: jdbc:postgresql://kestra-postgres:5432/kestra
+            driverClassName: org.postgresql.Driver
+            username: kestra
+            password: k3str4
+        kestra:
+          server:
+            basicAuth:
+              enabled: false
+          repository:
+            type: postgres
+          storage:
+            type: local
+            local:
+              basePath: "/app/storage"
+          queue:
+            type: postgres
+          tasks:
+            tmpDir:
+              path: /tmp/kestra-wd/tmp
+          url: http://localhost:8082/
+    # Host 8082 -> container 8080 (UI/API). Container 8081 is Kestra's
+    # management port and stays unpublished so it cannot clash with dbt docs.
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./data:/opt/demo/data
+      - kestra-storage:/app/storage
+    depends_on:
+      kestra-postgres:
+        condition: service_healthy
+    healthcheck:
+      # 8081 is the management endpoint; fall back to the UI on 8080 in case
+      # management endpoints are disabled.
+      test:
+        - CMD-SHELL
+        - curl -sf http://localhost:8081/health || curl -sf http://localhost:8080/
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 90s
+
+  kestra-run:
+    <<: *dbt-runner
+    profiles: ["kestra-run"]
+    environment:
+      KESTRA_URL: http://kestra:8080
+      KESTRA_MGMT_URL: http://kestra:8081
+      KESTRA_TENANT: main
+      KESTRA_FLOW_PATH: /opt/demo/kestra/flows/shop_revenue_pipeline.yml
+      DEMO_DATA_DIR: /opt/demo/data
+      BOOTSTRAP_TOOLS: kestra
+    volumes:
+      - ./data:/opt/demo/data
+      - ./kestra/flows:/opt/demo/kestra/flows:ro
+    depends_on:
+      kestra:
+        condition: service_healthy
+    command: ["/opt/demo/scripts/bootstrap.sh"]
+    restart: "no"
+
+  bootstrap:
+    <<: *dbt-runner
+    profiles: ["verify"]
+    environment:
+      AIRFLOW_URL: http://airflow-webserver:8080
+      DAGSTER_URL: http://dagster:3000
+      DBT_PROFILES_DIR: /opt/demo/dbt_project
+      DBT_PROJECT_DIR: /opt/demo/dbt_project
+      DEMO_DATA_DIR: /opt/demo/data
+      DUCKDB_PATH: /opt/demo/data/dagster.duckdb
+      BOOTSTRAP_TOOLS: airflow,dagster
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+      airflow-scheduler:
+        condition: service_healthy
+      dagster:
+        condition: service_healthy
+    command: ["/opt/demo/scripts/bootstrap.sh"]
+    restart: "no"
+
+  airflow-run:
+    <<: *dbt-runner
+    profiles: ["airflow-run"]
+    environment:
+      AIRFLOW_URL: http://airflow-webserver:8080
+      DEMO_DATA_DIR: /opt/demo/data
+      BOOTSTRAP_TOOLS: airflow
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+      airflow-scheduler:
+        condition: service_healthy
+    command: ["/opt/demo/scripts/bootstrap.sh"]
+    restart: "no"
+
+  dagster-run:
+    <<: *dbt-runner
+    profiles: ["dagster-run"]
+    environment:
+      DAGSTER_URL: http://dagster:3000
+      DBT_PROFILES_DIR: /opt/demo/dbt_project
+      DBT_PROJECT_DIR: /opt/demo/dbt_project
+      DEMO_DATA_DIR: /opt/demo/data
+      DUCKDB_PATH: /opt/demo/data/dagster.duckdb
+      BOOTSTRAP_TOOLS: dagster
+    depends_on:
+      dagster:
+        condition: service_healthy
+    command: ["/opt/demo/scripts/bootstrap.sh"]
+    restart: "no"
+
+volumes:
+  postgres-data:
+  airflow-logs:
+  dagster-home:
+  prefect-home:
+  kestra-postgres-data:
+  kestra-storage:

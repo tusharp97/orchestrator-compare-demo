@@ -1,0 +1,83 @@
+version: 2
+
+groups:
+  - name: revenue_analytics
+    owner:
+      name: Data Platform Workshop
+      email: data-platform@example.com
+
+models:
+  - name: stg_customers
+    description: Clean customer records from the CSV seed.
+    meta:
+      owner: data-platform-workshop
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_orders
+    description: Typed and normalized order records.
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        tests:
+          - relationships:
+              to: ref('stg_customers')
+              field: customer_id
+      - name: amount
+        tests:
+          - positive_value
+
+  - name: int_completed_orders
+    description: Completed orders enriched with customer attributes.
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+          - unique
+
+  - name: fct_daily_revenue
+    description: "{{ doc('revenue_mart') }}"
+    columns:
+      - name: order_date
+        tests:
+          - not_null
+          - unique
+      - name: gross_revenue
+        tests:
+          - not_null
+          - positive_value
+
+exposures:
+  - name: workshop_revenue_dashboard
+    label: Workshop Revenue Dashboard
+    type: dashboard
+    maturity: medium
+    url: http://localhost:3000
+    description: "{{ doc('orchestration_comparison') }}"
+    depends_on:
+      - ref('fct_daily_revenue')
+    owner:
+      name: Data Platform Workshop
+      email: data-platform@example.com
+
+unit_tests:
+  - name: daily_revenue_aggregates_completed_orders
+    description: Two completed orders become one daily aggregate.
+    model: fct_daily_revenue
+    overrides:
+      macros:
+        is_incremental: false
+    given:
+      - input: ref('int_completed_orders')
+        rows:
+          - {order_id: 1, order_date: '2026-08-24', amount: 10.00, customer_id: 1}
+          - {order_id: 2, order_date: '2026-08-24', amount: 20.00, customer_id: 2}
+    expect:
+      rows:
+        - {order_date: '2026-08-24', order_count: 2, customer_count: 2, gross_revenue: 30.00}

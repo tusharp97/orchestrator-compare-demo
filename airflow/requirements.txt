@@ -1,0 +1,3 @@
+# DuckDB is used by the Airflow Python publish_summary task.
+# dbt lives in /opt/dbt-venv so it does not share protobuf with Airflow 2.10.
+duckdb==1.2.2

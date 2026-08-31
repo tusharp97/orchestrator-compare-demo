@@ -1,0 +1,32 @@
+name: orchestrator_compare_demo
+version: "1.0.0"
+config-version: 2
+
+profile: orchestrator_compare_demo
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target", "dbt_packages", "logs"]
+
+vars:
+  min_order_amount: 0
+  demo_country: "ALL"
+
+on-run-end:
+  - "{{ log_workshop_run() }}"
+
+models:
+  orchestrator_compare_demo:
+    staging:
+      +materialized: view
+      +tags: ["staging", "nightly"]
+    intermediate:
+      +materialized: view
+      +tags: ["intermediate", "nightly"]
+    marts:
+      +tags: ["marts", "nightly"]
+      +group: revenue_analytics

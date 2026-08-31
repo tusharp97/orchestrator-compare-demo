@@ -1,0 +1,21 @@
+version: 2
+
+seeds:
+  - name: customers
+    description: Workshop customer source data.
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - unique
+
+  - name: orders
+    description: Workshop order source data, with monetary values in cents.
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+          - unique
+      - name: amount_cents
+        tests:
+          - positive_value

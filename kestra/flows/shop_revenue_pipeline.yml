@@ -1,0 +1,42 @@
+id: shop_revenue_pipeline
+namespace: demo
+description: The same dbt shop-revenue pipeline that Airflow, Dagster, and Prefect run
+
+variables:
+  dbt: /opt/dbt-venv/bin/dbt
+  python: /opt/dbt-venv/bin/python
+  dbt_args: >-
+    --project-dir /opt/demo/dbt_project
+    --profiles-dir /opt/demo/dbt_project
+    --target-path /tmp/dbt-target
+    --log-path /tmp/dbt-logs
+
+tasks:
+  - id: load_seed_data
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - mkdir -p /opt/demo/data /tmp/dbt-target /tmp/dbt-logs
+      - "{{ vars.dbt }} seed {{ vars.dbt_args }} --full-refresh"
+
+  - id: transform_with_dbt
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - "{{ vars.dbt }} run {{ vars.dbt_args }}"
+
+  - id: test_with_dbt
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - "{{ vars.dbt }} test {{ vars.dbt_args }}"
+
+  - id: publish_summary
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - "{{ vars.python }} /opt/demo/scripts/publish_summary.py"

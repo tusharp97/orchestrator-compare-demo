@@ -1,0 +1,7 @@
+order_id,customer_id,order_date,amount_cents,status
+1001,1,2026-08-24,12050,completed
+1002,2,2026-08-24,8000,completed
+1003,1,2026-08-25,4025,completed
+1004,3,2026-08-25,20000,cancelled
+1005,4,2026-08-26,31575,completed
+1006,2,2026-08-26,5550,completed
